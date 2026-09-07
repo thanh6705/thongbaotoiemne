@@ -21,83 +21,85 @@ function PushNotification() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const waitForServiceWorker = async () => {
+    const timeoutMs = 15000;
+
+    const timer = new Promise((_, reject) => {
+      setTimeout(() => 
+        reject(new Error("Service Worker chưa sẵn sàng sau 15 giây. Hãy kiểm tra quyền trình duyệt và HTTPS.")),
+      timeoutMs
+      );
+    });
+
+    const ready = navigator.serviceWorker.ready;
+    return Promise.race([ready, timer]);
+  };
+
   const enableNotification = async () => {
     try {
       setLoading(true);
       setMessage("");
 
-      // Kiểm tra trình duyệt có hỗ trợ Notification không
       if (!("Notification" in window)) {
-        throw new Error(
-          "Trình duyệt này không hỗ trợ thông báo."
-        );
+        throw new Error("Trình duyệt này không hỗ trợ thông báo.");
       }
 
       if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-        throw new Error(
-          "Trình duyệt này không hỗ trợ thông báo đẩy."
-        );
+        throw new Error("Trình duyệt này không hỗ trợ thông báo đẩy.");
       }
 
-      // Xin quyền thông báo
-      const permission = await Notification.requestPermission();
-
-      if (permission !== "granted") {
-        throw new Error(
-          "Bạn chưa cho phép nhận thông báo."
-        );
+      if (Notification.permission === "denied") {
+        throw new Error("Thông báo đã bị chặn trong trình duyệt. Hãy bật lại ở cài đặt trang web.");
       }
 
-      // Lấy Service Worker
-      const registration =
-        await navigator.serviceWorker.ready;
+      if (Notification.permission !== "granted") {
+        const permission = await Notification.requestPermission();
+
+        if (permission !== "granted") {
+          throw new Error("Bạn chưa cho phép nhận thông báo.");
+        }
+      }
+
+      if (!navigator.serviceWorker.controller) {
+        await navigator.serviceWorker.register("/sw.js");
+      }
+
+      const registration = await waitForServiceWorker();
 
       if (!import.meta.env.VITE_VAPID_PUBLIC_KEY) {
         throw new Error("Thiếu VAPID public key ở frontend.");
       }
 
-      // Dùng subscription hiện có nếu trình duyệt đã cấp quyền trước đó.
-      const subscription =
-        await registration.pushManager.getSubscription() ||
-        await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(
-            import.meta.env.VITE_VAPID_PUBLIC_KEY
-          )
-        });
+      const existingSubscription = await registration.pushManager.getSubscription();
 
-      // Lấy JWT
+      const subscription = existingSubscription || await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(
+          import.meta.env.VITE_VAPID_PUBLIC_KEY
+        )
+      });
+
       const token = localStorage.getItem("token");
 
-      // Gửi subscription lên backend
-      const response = await fetch(
-        `${API_URL}/push/subscribe`,
-        {
-          method: "POST",
-
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`
-          },
-
-          body: JSON.stringify(subscription)
-        }
-      );
+      const response = await fetch(`${API_URL}/push/subscribe`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(subscription)
+      });
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.message || "Không thể đăng ký thông báo."
-        );
+        throw new Error(data.message || "Không thể đăng ký thông báo.");
       }
 
-      setMessage(
-        "Đã bật thông báo thành công 🔔"
-      );
+      setMessage("Đã bật thông báo thành công 🔔");
     } catch (error) {
-      console.error(error);
-      setMessage(error.message);
+      console.error("Enable notification error:", error);
+      setMessage(error.message || "Không thể bật thông báo.");
     } finally {
       setLoading(false);
     }
